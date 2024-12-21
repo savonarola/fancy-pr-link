@@ -1,0 +1,132 @@
+#! /usr/bin/env python3
+
+import argparse
+import contextlib
+import itertools
+import json
+import os
+import subprocess
+import sys
+import threading
+import time
+from urllib import error, request
+
+import AppKit
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--pr-id", type=str, metavar="PR_ID", required=True, help="The GitHub PR ID to copy")
+    parser.add_argument("--repo", type=str, metavar="REPO", required=True, help="The GitHub repo")
+    parser.add_argument(
+        "--ollama-host", type=str, metavar="OLLAMA_HOST", default="127.0.0.1:11534", help="The ollama host"
+    )
+    parser.add_argument(
+        "--ollama-model", type=str, metavar="OLLAMA_MODEL", default="llama3.2:3b", help="The ollama model"
+    )
+    args = parser.parse_args()
+
+    pr_id = args.pr_id
+    repo = args.repo
+    ollama_host = args.ollama_host
+    ollama_model = args.ollama_model
+    with spinner("Fetching PR info"):
+        pr_info = get_pr_info(pr_id, repo)
+    url = pr_info["url"]
+    title = pr_info["title"]
+
+    with spinner("Guessing emoji"):
+        emoji = get_emoji(ollama_host, ollama_model, title)
+
+    html = f"""{emoji} <a href="{url}">{title}</a> #{pr_id}"""
+    text = f"{emoji} {title} {url}"
+
+    pasteboard = AppKit.NSPasteboard.generalPasteboard()
+
+    pasteboard.declareTypes_owner_([AppKit.NSPasteboardTypeHTML, AppKit.NSPasteboardTypeString], None)
+    pasteboard.setString_forType_(text, AppKit.NSPasteboardTypeString)
+    pasteboard.setString_forType_(html, AppKit.NSPasteboardTypeHTML)
+
+    print(text)
+
+
+def get_pr_info(pr_id, repo):
+    env = os.environ
+    env["GH_REPO"] = repo
+    result = subprocess.run(
+        ["gh", "pr", "view", str(pr_id), "--json", "title,url"],
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        raise Exception(result.stderr)
+    return json.loads(result.stdout)
+
+
+def get_emoji(ollama_host, ollama_model, title):
+    prompt = (
+        f"Summarize the title of a GitHub Pull Request with a single emoji best describing it. "
+        f"Answer with emoji only. Title is: {title}"
+    )
+    return ollama_request(ollama_host, ollama_model, prompt) or "•"
+
+
+def ollama_request(ollama_host, ollama_model, prompt):
+    response = post_to_api(
+        f"http://{ollama_host}/api/generate",
+        {
+            "model": ollama_model,
+            "prompt": prompt,
+            "stream": False,
+        },
+    )
+    if response["done"]:
+        return response["response"]
+    else:
+        return None
+
+
+def post_to_api(url, data):
+    json_data = json.dumps(data).encode("utf-8")
+
+    headers = {"Content-Type": "application/json", "Accept": "application/json"}
+
+    req = request.Request(url, data=json_data, headers=headers, method="POST")
+
+    try:
+        with request.urlopen(req) as response:
+            response_body = response.read().decode("utf-8")
+            response_data = json.loads(response_body)
+            return response_data
+    except error.HTTPError as e:
+        raise Exception(f"HTTP Error: {e.code} - {e.reason}")
+    except error.URLError as e:
+        raise Exception(f"URL Error: {e.reason}")
+
+
+@contextlib.contextmanager
+def spinner(label="", delay=0.1):
+    stop_event = threading.Event()
+
+    def spinning():
+        spinner_cycle = itertools.cycle(["|", "/", "-", "\\"])
+        while not stop_event.is_set():
+            sys.stdout.write(f"\r{next(spinner_cycle)} {label}")
+            sys.stdout.flush()
+            time.sleep(delay)
+            sys.stdout.write("\b")
+
+    spinner_thread = threading.Thread(target=spinning)
+    spinner_thread.start()
+
+    try:
+        yield
+    finally:
+        stop_event.set()
+        spinner_thread.join()
+        print(f"\r{label} — done")
+
+
+if __name__ == "__main__":
+    main()

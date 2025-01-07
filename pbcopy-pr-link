@@ -18,6 +18,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--pr-id", type=str, metavar="PR_ID", required=True, help="The GitHub PR ID to copy")
     parser.add_argument("--repo", type=str, metavar="REPO", required=True, help="The GitHub repo")
+    parser.add_argument("--guess-emoji", action="store_true", help="Guess emoji")
     parser.add_argument(
         "--ollama-host", type=str, metavar="OLLAMA_HOST", default="127.0.0.1:11534", help="The ollama host"
     )
@@ -30,13 +31,17 @@ def main():
     repo = args.repo
     ollama_host = args.ollama_host
     ollama_model = args.ollama_model
+    guess_emoji = args.guess_emoji
     with spinner("Fetching PR info"):
         pr_info = get_pr_info(pr_id, repo)
     url = pr_info["url"]
     title = pr_info["title"]
 
-    with spinner("Guessing emoji"):
-        emoji = get_emoji(ollama_host, ollama_model, title)
+    if guess_emoji:
+        with spinner("Guessing emoji"):
+            emoji = get_emoji(ollama_host, ollama_model, title)
+    else:
+        emoji = "•"
 
     html = f"""{emoji} <a href="{url}">{title}</a> #{pr_id}"""
     text = f"{emoji} {title} {url}"
